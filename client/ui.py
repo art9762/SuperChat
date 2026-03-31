@@ -132,24 +132,21 @@ class MessengerApp(App):
         self.update_contacts_list()
 
     def update_contacts_list(self):
-        def _update():
-            contacts = db.get_contacts()
-            sidebar = self.query_one("#sidebar", ListView)
-            sidebar.clear()
-            for c in contacts:
-                item = ListItem(Label(c["username"], classes="contact_item"), name=c["username"])
-                sidebar.append(item)
-        self.call_from_thread(_update)
+        # Поскольку network.py работает в том же event_loop через asyncio,
+        # мы можем обновлять виджеты напрямую
+        contacts = db.get_contacts()
+        sidebar = self.query_one("#sidebar", ListView)
+        sidebar.clear()
+        for c in contacts:
+            item = ListItem(Label(c["username"], classes="contact_item"), name=c["username"])
+            sidebar.append(item)
 
     def handle_new_message(self, contact, text, is_mine=False):
-        def _update():
-            # Если сообщение от активного контакта или мы его написали ему
-            if self.active_contact == contact:
-                container = self.query_one("#messages_container", ScrollableContainer)
-                container.mount(ChatMessage(contact, text, "", is_mine))
-                container.scroll_end(animate=False)
-            # Иначе обновить список контактов (можно добавить индикатор непрочитанных)
-        self.call_from_thread(_update)
+        # Если сообщение от активного контакта или мы его написали ему
+        if self.active_contact == contact:
+            container = self.query_one("#messages_container", ScrollableContainer)
+            container.mount(ChatMessage(contact, text, "", is_mine))
+            container.scroll_end(animate=False)
 
     def watch_active_contact(self, old_contact, new_contact):
         if not new_contact:
