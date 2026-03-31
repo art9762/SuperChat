@@ -1,409 +1,275 @@
-from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Input, ListView, ListItem, Label, Static
-from textual.containers import Horizontal, Vertical, ScrollableContainer
-from textual.screen import Screen
-from textual.reactive import reactive
-from datetime import datetime
 import asyncio
+import logging
 import os
+import re
+import sys
+from datetime import datetime
+
+from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.formatted_text import ANSI
+from prompt_toolkit.history import InMemoryHistory
+from prompt_toolkit.patch_stdout import patch_stdout
+
 import db
 from network import NetworkEngine
 
+# ── Silence network logging (goes to file instead) ──────────────────────────
+log_path = os.path.join(os.path.dirname(__file__), "superchat.log")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)s  %(message)s",
+    handlers=[logging.FileHandler(log_path)],
+)
 
-class LoginScreen(Screen):
-    """Экран входа в стиле Claude Code."""
+# ── ANSI palette ─────────────────────────────────────────────────────────────
+R   = "\033[0m"
+B   = "\033[1m"
+DIM = "\033[2m"
+OR  = "\033[38;2;217;119;6m"    # orange  #d97706
+GR  = "\033[38;2;34;197;94m"    # green   #22c55e
+RE  = "\033[38;2;239;68;68m"    # red     #ef4444
+GY  = "\033[38;2;107;114;128m"  # gray    #6b7280
+WH  = "\033[38;2;229;229;229m"  # white   #e5e5e5
+YE  = "\033[38;2;250;204;21m"   # yellow  #facc15
 
-    CSS = """
-    LoginScreen {
-        background: #1a1a1a;
-        color: #e5e5e5;
-    }
-    #login_container {
-        align: center middle;
-        height: 100%;
-        width: 100%;
-        background: #1a1a1a;
-    }
-    #login_box {
-        width: 52;
-        height: auto;
-        padding: 2 3;
-        background: #1a1a1a;
-        border: solid #d97706;
-    }
-    #logo {
-        text-align: center;
-        color: #d97706;
-        text-style: bold;
-        width: 100%;
-        margin-bottom: 0;
-    }
-    #logo_sub {
-        text-align: center;
-        color: #6b7280;
-        width: 100%;
-        margin-bottom: 2;
-    }
-    #username_label {
-        color: #9ca3af;
-        width: 100%;
-        margin-top: 1;
-        margin-bottom: 0;
-        text-style: bold;
-    }
-    #username_input {
-        width: 100%;
-        background: #0d0d0d;
-        border: solid #374151;
-        color: #e5e5e5;
-        padding: 0 1;
-        margin-top: 1;
-    }
-    #username_input:focus {
-        border: solid #d97706;
-        background: #0d0d0d;
-    }
-    #hint {
-        text-align: center;
-        color: #6b7280;
-        margin-top: 2;
-        width: 100%;
-    }
-    """
+SERVER_HOST = "cobyacoin.keenetic.link"
+SERVER_PORT  = 8888
 
-    def compose(self) -> ComposeResult:
-        yield Vertical(
-            Vertical(
-                Label("◆ SUPERCHAT", id="logo"),
-                Label("powered by claude code aesthetic", id="logo_sub"),
-                Label("USERNAME", id="username_label"),
-                Input(placeholder="enter your name...", id="username_input"),
-                Label("press enter to continue", id="hint"),
-                id="login_box",
-            ),
-            id="login_container",
-        )
+# ── Global state ─────────────────────────────────────────────────────────────
+_username:       str | None = None
+_network:        NetworkEngine | None = None
+_active_contact: str | None = None
+_status_line:    str = f"{RE}● offline{R}"
 
-    async def on_input_submitted(self, event: Input.Submitted) -> None:
-        username = event.value.strip()
-        if username:
-            db.save_setting("username", username)
-            self.app.username = username
-            self.app.pop_screen()
-            self.app.start_network()
+# ── Formatting helpers ────────────────────────────────────────────────────────
 
+def _out(text: str = "") -> None:
+    """Print a line (safe inside patch_stdout context)."""
+    print(text)
 
-class ChatMessage(Static):
-    """Виджет для отображения одного сообщения в виде скругленных пузырей."""
+def _info(text: str) -> None:
+    _out(f"  {GY}{text}{R}")
 
-    def __init__(self, sender: str, text: str, timestamp: str, is_mine: bool):
-        # Присваиваем класс в зависимости от того, кто отправил
-        classes = "mine" if is_mine else "theirs"
-        super().__init__(classes=classes)
-        self.sender = sender
-        self.text = text
-        self.is_mine = is_mine
+def _ok(text: str) -> None:
+    _out(f"  {GR}{text}{R}")
 
-        # Извлекаем HH:MM
-        if timestamp:
-            time_part = timestamp.split(" ")[-1] if " " in timestamp else timestamp
-            self.ts = time_part[:5]
-        else:
-            self.ts = datetime.now().strftime("%H:%M")
+def _warn(text: str) -> None:
+    _out(f"  {YE}{text}{R}")
 
-    def render(self) -> str:
-        if self.is_mine:
-            sender_str = f"[b #d97706]{self.sender}[/]"
-        else:
-            sender_str = f"[b #e5e5e5]{self.sender}[/]"
+def _err(text: str) -> None:
+    _out(f"  {RE}{text}{R}")
 
-        if "[📎" in self.text or self.sender == "Server":
-            return f"{sender_str} [dim #4b5563]{self.ts}[/]\n[#6b7280]{self.text}[/]"
+def _rule() -> None:
+    _out(f"  {GY}{'─' * 52}{R}")
 
-        return f"{sender_str} [dim #4b5563]{self.ts}[/]\n[#d1d5db]{self.text}[/]"
+def _msg(sender: str, text: str, ts: str = "", is_mine: bool = False) -> None:
+    ts = ts or datetime.now().strftime("%H:%M")
+    name = f"{OR}{B}{sender}{R}" if is_mine else f"{WH}{B}{sender}{R}"
+    _out(f"  {name}  {DIM}{GY}{ts}{R}  {WH}{text}{R}")
 
+# ── Commands help ─────────────────────────────────────────────────────────────
 
-class MessengerApp(App):
-    CSS = """
-    /* ── GLOBAL ── */
-    Screen {
-        background: #1a1a1a;
-        color: #e5e5e5;
-    }
-    Header {
-        background: #0d0d0d;
-        color: #d97706;
-        text-style: bold;
-    }
-    Footer {
-        background: #0d0d0d;
-        color: #6b7280;
-    }
-
-    /* ── STATUS BAR ── */
-    #connection_status {
-        width: 100%;
-        height: 1;
-        text-align: left;
-        background: #0d0d0d;
-        color: #6b7280;
-        padding: 0 1;
-    }
-
-    /* ── MAIN LAYOUT ── */
-    #main_container {
-        height: 1fr;
-    }
-
-    /* ── САЙДБАР ── */
-    #sidebar_panel {
-        width: 24;
-        height: 100%;
-        background: #111111;
-        border-right: solid #262626;
-    }
-    #sidebar_header {
-        height: 2;
-        width: 100%;
-        text-align: left;
-        background: #111111;
-        color: #d97706;
-        text-style: bold;
-        border-bottom: solid #262626;
-        padding: 0 1;
-    }
-    #sidebar {
-        height: 1fr;
-        background: #111111;
-        padding: 0 0;
-    }
-
-    /* Контакты */
-    ListView > ListItem {
-        background: #111111;
-        padding: 0 1;
-        margin: 0;
-    }
-    ListView > ListItem:hover {
-        background: #1f1f1f;
-    }
-    ListView > ListItem.--highlight {
-        background: #292524;
-    }
-    ListView > ListItem.--highlight > Label {
-        color: #d97706;
-        text-style: bold;
-    }
-    .contact_item {
-        color: #9ca3af;
-    }
-
-    /* ── ЧАТ ── */
-    #chat_area {
-        height: 100%;
-        background: #1a1a1a;
-    }
-    #chat_header {
-        height: 2;
-        width: 100%;
-        text-align: left;
-        background: #1a1a1a;
-        color: #e5e5e5;
-        border-bottom: solid #262626;
-        padding: 0 1;
-        text-style: bold;
-    }
-
-    #messages_container {
-        height: 1fr;
-        padding: 1 2;
-        background: #1a1a1a;
-    }
-
-    /* ── СООБЩЕНИЯ ── */
-    .mine, .theirs {
-        text-align: left;
-        background: #1a1a1a;
-        margin: 0;
-        padding: 0 1 1 1;
-    }
-    .mine:hover, .theirs:hover {
-        background: #1f1f1f;
-    }
-
-    /* ── ПОЛЕ ВВОДА ── */
-    #input_area {
-        height: 5;
-        padding: 1 2;
-        background: #1a1a1a;
-        align: center middle;
-        border-top: solid #262626;
-    }
-    #input_box {
-        background: #0d0d0d;
-        border: solid #374151;
-        color: #e5e5e5;
-        height: 3;
-        width: 100%;
-        padding: 1 1;
-    }
-    #input_box:focus {
-        border: solid #d97706;
-        background: #0d0d0d;
-    }
-    """
-
-    BINDINGS = [
-        ("q", "quit", "Quit"),
+def _print_help() -> None:
+    cmds = [
+        ("/chat <user>", "open chat with a user"),
+        ("/contacts",    "list online contacts"),
+        ("/history",     "reload message history"),
+        ("/send <file>", "send file to current contact"),
+        ("/back",        "close current chat"),
+        ("/help",        "show this help"),
+        ("/quit",        "exit superchat"),
     ]
+    _out()
+    for cmd, desc in cmds:
+        _out(f"  {OR}{cmd:<18}{R}  {GY}{desc}{R}")
+    _out()
 
-    active_contact = reactive(None)
+# ── History loader ────────────────────────────────────────────────────────────
 
-    def __init__(self):
-        super().__init__()
-        db.init_db()
-        self.username = db.get_setting("username")
-        self.network = None
-        self.server_host = "cobyacoin.keenetic.link"
-        self.server_port = 8888
+def _load_history(contact: str) -> None:
+    messages = db.get_messages(contact)
+    if not messages:
+        _info("(no history yet)")
+        return
+    for m in messages:
+        is_mine = m["sender"] == _username
+        raw_ts  = m["timestamp"] or ""
+        ts      = raw_ts.split(" ")[-1][:5] if raw_ts else ""
+        _msg(m["sender"], m["text"], ts, is_mine)
 
-    def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
-        yield Label("● offline", id="connection_status")
-        yield Horizontal(
-            # ── Боковая панель ──
-            Vertical(
-                Label("◆ messages", id="sidebar_header"),
-                ListView(id="sidebar"),
-                id="sidebar_panel",
-            ),
-            # ── Область чата ──
-            Vertical(
-                Label("→ select a contact", id="chat_header"),
-                ScrollableContainer(id="messages_container"),
-                Vertical(
-                    Input(
-                        placeholder="type a message... (or /send file.png)",
-                        id="input_box",
-                    ),
-                    id="input_area",
-                ),
-                id="chat_area",
-            ),
-            id="main_container",
-        )
-        yield Footer()
+# ── Network callbacks ─────────────────────────────────────────────────────────
 
-    async def on_mount(self) -> None:
-        if not self.username:
-            self.push_screen(LoginScreen())
-        else:
-            self.start_network()
+def _on_message(contact: str, text: str, is_mine: bool = False) -> None:
+    """Called from network layer for both incoming and outgoing messages."""
+    if contact != _active_contact:
+        # Notification for background chat
+        name = contact if not is_mine else _username
+        _out(f"\n  {GY}[{contact}]{R}  {GY}{text[:60]}{'…' if len(text)>60 else ''}{R}")
+        return
+    sender = _username if is_mine else contact
+    _msg(sender, text, is_mine=is_mine)
 
-    def start_network(self) -> None:
-        self.title = f"superchat · {self.username}"
-        self.network = NetworkEngine(self.username, self.server_host, self.server_port)
-        self.network.on_contacts_update_callback = self.update_contacts_list
-        self.network.on_message_callback = self.handle_new_message
-        self.network.on_status_change_callback = self.update_status
-        asyncio.create_task(self.network.start())
-        self.update_contacts_list()
 
-    def update_status(self, text: str) -> None:
-        status_label = self.query_one("#connection_status", Label)
-        
-        if "Connected" in text:
-            status_label.styles.color = "#22c55e"
-        else:
-            status_label.styles.color = "#ef4444"
+def _on_contacts_update() -> None:
+    contacts = db.get_contacts()
+    names = [c["username"] for c in contacts]
+    if names:
+        _info(f"contacts updated: {', '.join(names)}")
 
-        status_label.update(f"● {text.lower()}")
 
-    def update_contacts_list(self) -> None:
-        contacts = db.get_contacts()
-        sidebar = self.query_one("#sidebar", ListView)
-        sidebar.clear()
-        
-        # Системный контакт
-        item_server = ListItem(
-            Label("◇ server echo", classes="contact_item"), name="Server"
-        )
-        sidebar.append(item_server)
+def _on_status(text: str) -> None:
+    global _status_line
+    clean = re.sub(r"[^\x20-\x7E]", "", text).strip()   # strip emoji
+    if "Connected" in text:
+        _status_line = f"{GR}● {clean.lower()}{R}"
+    elif "Connecting" in text:
+        _status_line = f"{YE}● {clean.lower()}{R}"
+    else:
+        _status_line = f"{RE}● {clean.lower()}{R}"
 
-        for c in contacts:
-            item = ListItem(
-                Label(f"◇ {c['username']}", classes="contact_item"),
-                name=c["username"],
-            )
-            sidebar.append(item)
+# ── Main ──────────────────────────────────────────────────────────────────────
 
-    def handle_new_message(self, contact: str, text: str, is_mine: bool = False) -> None:
-        if self.active_contact == contact:
-            container = self.query_one("#messages_container", ScrollableContainer)
-            container.mount(ChatMessage(contact, text, "", is_mine))
-            container.scroll_end(animate=False)
+async def main() -> None:
+    global _username, _network, _active_contact
 
-    def watch_active_contact(self, old_contact: str, new_contact: str) -> None:
-        if not new_contact:
+    db.init_db()
+    _username = db.get_setting("username")
+
+    os.system("clear")
+
+    # ── Banner ────────────────────────────────────────────────────────────────
+    _out(f"\n  {OR}{B}◆ superchat{R}  {GY}end-to-end encrypted messenger{R}\n")
+
+    # ── Login ─────────────────────────────────────────────────────────────────
+    if not _username:
+        try:
+            _username = input(f"  {GY}username{R} › ").strip()
+        except (EOFError, KeyboardInterrupt):
             return
-
-        # Обновляем заголовок открытого чата
-        header = self.query_one("#chat_header", Label)
-        if new_contact == "Server":
-            header.update("→ server echo")
-        else:
-            header.update(f"→ {new_contact}")
-
-        # Очищаем и загружаем историю
-        container = self.query_one("#messages_container", ScrollableContainer)
-        for child in list(container.children):
-            child.remove()
-
-        messages = db.get_messages(new_contact)
-        for msg in messages:
-            is_mine = msg["sender"] == self.username
-            container.mount(
-                ChatMessage(msg["sender"], msg["text"], msg["timestamp"], is_mine)
-            )
-
-        container.scroll_end(animate=False)
-        self.query_one("#input_box", Input).focus()
-
-    async def on_list_view_selected(self, event: ListView.Selected) -> None:
-        self.active_contact = event.item.name
-
-    async def on_input_submitted(self, event: Input.Submitted) -> None:
-        if not self.active_contact:
-            self.notify("Please select a contact first! 👈", severity="warning")
+        if not _username:
+            _err("username cannot be empty")
             return
+        db.save_setting("username", _username)
+        _out()
 
-        text = event.value.strip()
-        if not text:
-            return
+    _info(f"logged in as {OR}{B}{_username}{R}")
 
-        event.input.value = ""
+    # ── Network ───────────────────────────────────────────────────────────────
+    _network = NetworkEngine(_username, SERVER_HOST, SERVER_PORT)
+    _network.on_message_callback        = _on_message
+    _network.on_contacts_update_callback = _on_contacts_update
+    _network.on_status_change_callback  = _on_status
+    asyncio.create_task(_network.start())
 
-        if self.active_contact == "Server":
-            self.handle_new_message("Server", text, is_mine=True)
-            self.handle_new_message("Server", f"Echo: {text}", is_mine=False)
-            db.save_message("Server", self.username, text)
-            db.save_message("Server", "Server", f"Echo: {text}")
-        else:
-            if text.startswith("/send "):
-                file_path = text[6:].strip()
-                if os.path.exists(file_path):
-                    self.notify(f"Sending file {os.path.basename(file_path)}...")
-                    asyncio.create_task(
-                        self.network.send_message(
-                            self.active_contact, "", is_file=True, file_path=file_path
-                        )
-                    )
-                else:
-                    self.notify(f"File not found: {file_path}", severity="error")
+    _print_help()
+
+    # ── REPL ──────────────────────────────────────────────────────────────────
+    completer = WordCompleter(
+        ["/chat", "/contacts", "/history", "/send", "/back", "/help", "/quit"],
+        pattern=re.compile(r"(/\w*)"),
+    )
+    session: PromptSession = PromptSession(
+        history=InMemoryHistory(),
+        completer=completer,
+    )
+
+    with patch_stdout():
+        while True:
+            # build prompt string
+            if _active_contact:
+                prompt_str = f"{OR}{_active_contact}{R} › "
             else:
-                asyncio.create_task(self.network.send_message(self.active_contact, text))
+                prompt_str = f"{GY}›{R} "
+
+            try:
+                raw = await session.prompt_async(
+                    ANSI(prompt_str),
+                    bottom_toolbar=ANSI(f"  {_status_line}   {GY}{_username}{R}"),
+                )
+            except (EOFError, KeyboardInterrupt):
+                break
+
+            text = raw.strip()
+            if not text:
+                continue
+
+            # ── Commands ──────────────────────────────────────────────────────
+            if text in ("/quit", "/exit", "q"):
+                break
+
+            elif text == "/help":
+                _print_help()
+
+            elif text == "/contacts":
+                contacts = db.get_contacts()
+                if not contacts:
+                    _info("no contacts online yet")
+                else:
+                    _out()
+                    for c in contacts:
+                        _out(f"  {GY}◇{R}  {WH}{c['username']}{R}")
+                    _out()
+
+            elif text.startswith("/chat "):
+                target = text[6:].strip()
+                if not target:
+                    _err("usage: /chat <username>")
+                    continue
+                _active_contact = target
+                _out(f"\n  {GY}chatting with {OR}{B}{target}{R}\n")
+                _load_history(target)
+                _out()
+
+            elif text == "/back":
+                _active_contact = None
+                _info("chat closed")
+
+            elif text == "/history":
+                if not _active_contact:
+                    _warn("no active chat — use /chat <user> first")
+                else:
+                    _rule()
+                    _load_history(_active_contact)
+                    _rule()
+
+            elif text.startswith("/send "):
+                if not _active_contact:
+                    _warn("no active chat — use /chat <user> first")
+                else:
+                    file_path = text[6:].strip()
+                    if os.path.exists(file_path):
+                        _info(f"sending {os.path.basename(file_path)}…")
+                        asyncio.create_task(
+                            _network.send_message(
+                                _active_contact, "", is_file=True, file_path=file_path
+                            )
+                        )
+                    else:
+                        _err(f"file not found: {file_path}")
+
+            elif text.startswith("/"):
+                _err(f"unknown command: {text}")
+                _info("type /help for available commands")
+
+            # ── Plain message ─────────────────────────────────────────────────
+            else:
+                if not _active_contact:
+                    _warn("no active chat — use /chat <user> first")
+                    continue
+
+                if _active_contact == "Server":
+                    # local echo mode
+                    _msg(_username, text, is_mine=True)
+                    _msg("Server", f"Echo: {text}")
+                    db.save_message("Server", _username, text)
+                    db.save_message("Server", "Server", f"Echo: {text}")
+                else:
+                    # network.send_message fires _on_message callback itself
+                    asyncio.create_task(_network.send_message(_active_contact, text))
+
+    _out(f"\n  {GY}goodbye{R}\n")
 
 
 if __name__ == "__main__":
-    app = MessengerApp()
-    app.run()
+    asyncio.run(main())
