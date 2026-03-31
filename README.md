@@ -13,6 +13,14 @@ docker run -d -p 8888:8888 --name superchat-server ghcr.io/art9762/superchat:lat
 ```
 *(Убедитесь, что порт 8888 открыт в вашем файрволе для входящих TCP-соединений).*
 
+**Обновление сервера:**
+Если вышло обновление и вы хотите переустановить сервер, выполните эти 3 команды:
+```bash
+docker pull ghcr.io/art9762/superchat:latest
+docker rm -f superchat-server
+docker run -d -p 8888:8888 --name superchat-server ghcr.io/art9762/superchat:latest
+```
+
 ---
 
 ### 2. Установка Клиента (Мессенджера)
