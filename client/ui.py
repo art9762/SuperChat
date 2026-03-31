@@ -22,7 +22,7 @@ class LoginScreen(Screen):
         align: center middle;
         height: 100%;
         width: 100%;
-        background: radial-gradient(circle, #24243e 0%, #302b63 50%, #0f0c29 100%);
+        background: #0f0c29;
     }
     #login_box {
         width: 50;
@@ -153,7 +153,7 @@ class MessengerApp(App):
         width: 100%;
         height: 1;
         text-align: center;
-        background: linear-gradient(90deg, #ec4899, #8b5cf6, #3b82f6);
+        background: #8b5cf6;
         color: white;
         text-style: bold;
     }
@@ -194,7 +194,7 @@ class MessengerApp(App):
         background: #334155;
     }
     ListView > ListItem.--highlight {
-        background: linear-gradient(90deg, #db2777, #7c3aed);
+        background: #7c3aed;
     }
     ListView > ListItem.--highlight > Label {
         color: white;
@@ -230,7 +230,7 @@ class MessengerApp(App):
     .mine {
         /* Твои сообщения прижаты вправо, розово-фиолетовые */
         text-align: left;
-        background: linear-gradient(135deg, #d946ef, #8b5cf6);
+        background: #8b5cf6;
         color: white;
         margin: 0 0 1 15; /* Отступ слева огромный, справа 0 */
         padding: 1 2;
@@ -241,7 +241,7 @@ class MessengerApp(App):
     .theirs {
         /* Чужие сообщения прижаты влево, сине-бирюзовые */
         text-align: left;
-        background: linear-gradient(135deg, #2563eb, #0891b2);
+        background: #0891b2;
         color: white;
         margin: 0 15 1 0; /* Отступ справа огромный, слева 0 */
         padding: 1 2;
