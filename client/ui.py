@@ -2,18 +2,21 @@ from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, Input, ListView, ListItem, Label, Static
 from textual.containers import Horizontal, Vertical, ScrollableContainer
 from textual.screen import Screen
+from textual.reactive import reactive
+from datetime import datetime
 import asyncio
+import os
 import db
 from network import NetworkEngine
-from textual.reactive import reactive
 
 
 class LoginScreen(Screen):
-    """Экран входа при первом запуске."""
+    """Экран входа при первом запуске (в стиле VS Code Welcome Screen)."""
 
     CSS = """
     LoginScreen {
-        background: #0d1117;
+        background: #1e1e1e;
+        color: #cccccc;
     }
     #login_container {
         align: center middle;
@@ -21,49 +24,52 @@ class LoginScreen(Screen):
         width: 100%;
     }
     #login_box {
-        width: 54;
+        width: 60;
         height: auto;
         padding: 2 4;
-        background: #161b22;
-        border: round #30363d;
+        background: #252526;
+        border: solid #3c3c3c;
     }
     #logo {
         text-align: center;
-        color: #58a6ff;
+        color: #007acc;
         text-style: bold;
         width: 100%;
         margin-bottom: 0;
     }
     #logo_sub {
         text-align: center;
-        color: #3fb950;
+        color: #4ec9b0;
         width: 100%;
         margin-bottom: 0;
     }
     #app_tagline {
         text-align: center;
-        color: #8b949e;
+        color: #858585;
         width: 100%;
         margin-bottom: 2;
     }
     #username_label {
-        color: #8b949e;
+        color: #cccccc;
         width: 100%;
         margin-bottom: 0;
     }
     #username_input {
         width: 100%;
-        background: #21262d;
-        border: solid #30363d;
-        color: #e6edf3;
+        background: #3c3c3c;
+        border: none;
+        border-bottom: solid #007acc;
+        color: #cccccc;
+        padding: 0 1;
+        margin-top: 1;
     }
     #username_input:focus {
-        border: solid #58a6ff;
+        border-bottom: solid #0098ff;
     }
     #hint {
         text-align: center;
-        color: #6e7681;
-        margin-top: 1;
+        color: #858585;
+        margin-top: 2;
         width: 100%;
     }
     """
@@ -71,12 +77,12 @@ class LoginScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Vertical(
             Vertical(
-                Label("SuperChat", id="logo"),
-                Label("━━━━━━━━━━━━━━━━━━━━━━━━━━━", id="logo_sub"),
-                Label("Secure  •  E2EE  •  P2P Messenger", id="app_tagline"),
-                Label("Your username:", id="username_label"),
+                Label("SuperChat / VS Code Edition", id="logo"),
+                Label("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", id="logo_sub"),
+                Label("Secure • E2EE • P2P Messenger", id="app_tagline"),
+                Label("Enter your developer handle:", id="username_label"),
                 Input(placeholder="e.g. alice_42", id="username_input"),
-                Label("↵  Press Enter to start chatting", id="hint"),
+                Label("↵  Press Enter to open workspace", id="hint"),
                 id="login_box",
             ),
             id="login_container",
@@ -92,11 +98,10 @@ class LoginScreen(Screen):
 
 
 class ChatMessage(Static):
-    """Виджет для отображения одного сообщения в чате."""
+    """Виджет для отображения одного сообщения в чате (как лог терминала/кода)."""
 
     def __init__(self, sender: str, text: str, timestamp: str, is_mine: bool):
-        classes = "mine" if is_mine else "theirs"
-        super().__init__(classes=classes)
+        super().__init__()
         self.sender = sender
         self.text = text
         self.is_mine = is_mine
@@ -106,40 +111,51 @@ class ChatMessage(Static):
             time_part = timestamp.split(" ")[-1] if " " in timestamp else timestamp
             self.ts = time_part[:5]
         else:
-            from datetime import datetime
             self.ts = datetime.now().strftime("%H:%M")
 
-    def render(self) -> str:
+        self.styles.padding = (0, 0)
+        self.styles.margin = (0, 0, 0, 0)
+        
+        # Стилизация под VS Code Dark+
         if self.is_mine:
-            return f"[dim]{self.ts}  You[/dim]\n{self.text}"
+            # Зеленовато-коричневый цвет (как string в VS Code)
+            self.content = f"[#858585][{self.ts}][/] [#569cd6]you[/] [#cccccc]> {text}[/]"
         else:
-            return f"[dim]{self.sender}  {self.ts}[/dim]\n{self.text}"
+            # Цвет бирюзовый (как типы/классы)
+            self.content = f"[#858585][{self.ts}][/] [#4ec9b0]{self.sender}[/] [#cccccc]> {text}[/]"
+            
+        # Системные сообщения и файлы подкрашиваем в зеленый цвет комментариев
+        if "[📎" in text or sender == "Server":
+            self.content = f"[#858585][{self.ts}][/] [#569cd6]{self.sender}[/] [#608b4e]> {text}[/]"
+
+    def render(self) -> str:
+        return self.content
 
 
 class MessengerApp(App):
     CSS = """
     /* ── GLOBAL ── */
     Screen {
-        background: #0d1117;
+        background: #1e1e1e;
+        color: #cccccc;
     }
     Header {
-        background: #161b22;
-        color: #58a6ff;
-        text-style: bold;
+        background: #333333;
+        color: #cccccc;
     }
     Footer {
-        background: #161b22;
-        color: #6e7681;
+        background: #007acc;
+        color: white;
     }
 
     /* ── STATUS BAR ── */
     #connection_status {
         width: 100%;
         height: 1;
-        text-align: center;
-        background: #21262d;
-        color: #f85149;
-        text-style: bold;
+        text-align: left;
+        background: #007acc;
+        color: white;
+        padding: 0 1;
     }
 
     /* ── MAIN LAYOUT ── */
@@ -147,100 +163,81 @@ class MessengerApp(App):
         height: 1fr;
     }
 
-    /* ── SIDEBAR ── */
+    /* ── EXPLORER (SIDEBAR) ── */
     #sidebar_panel {
-        width: 30;
+        width: 35;
         height: 100%;
-        background: #161b22;
-        border-right: solid #30363d;
+        background: #252526;
+        border-right: solid #3c3c3c;
     }
     #sidebar_header {
-        height: 3;
+        height: 2;
         width: 100%;
-        text-align: center;
-        background: #161b22;
-        color: #58a6ff;
+        text-align: left;
+        background: #252526;
+        color: #cccccc;
         text-style: bold;
-        border-bottom: solid #30363d;
-        padding: 1 1;
+        padding: 1 1 0 1;
     }
     #sidebar {
         height: 1fr;
-        background: #161b22;
+        background: #252526;
     }
     .contact_item {
-        color: #c9d1d9;
+        color: #cccccc;
         padding: 0 1;
     }
     ListItem {
-        background: #161b22;
+        background: #252526;
         padding: 0 0;
     }
     ListItem:hover {
-        background: #21262d;
+        background: #2a2d2e;
     }
     ListItem.--highlight {
-        background: #1f3a5f;
+        background: #37373d;
     }
     ListItem.--highlight > Label {
-        color: #58a6ff;
-        text-style: bold;
+        color: #ffffff;
     }
 
-    /* ── CHAT PANEL ── */
+    /* ── EDITOR (CHAT PANEL) ── */
     #chat_area {
         height: 100%;
-        background: #0d1117;
+        background: #1e1e1e;
     }
     #chat_header {
         height: 3;
         width: 100%;
         text-align: left;
-        background: #161b22;
-        color: #e6edf3;
-        text-style: bold;
-        border-bottom: solid #30363d;
+        background: #1e1e1e;
+        color: #cccccc;
+        border-bottom: solid #3c3c3c;
         padding: 1 2;
     }
+    
     #messages_container {
         height: 1fr;
         padding: 1 2;
-        background: #0d1117;
+        background: #1e1e1e;
     }
 
-    /* ── MESSAGE BUBBLES ── */
-    .mine {
-        text-align: right;
-        background: #1c3557;
-        color: #cae8ff;
-        margin: 0 0 1 10;
-        padding: 0 2;
-        border-left: solid #58a6ff;
-    }
-    .theirs {
-        text-align: left;
-        background: #21262d;
-        color: #c9d1d9;
-        margin: 0 10 1 0;
-        padding: 0 2;
-        border-left: solid #30363d;
-    }
-
-    /* ── INPUT AREA ── */
+    /* ── TERMINAL (INPUT AREA) ── */
     #input_area {
-        height: 5;
-        padding: 1 2;
-        background: #161b22;
-        border-top: solid #30363d;
+        height: 4;
+        padding: 0 2;
+        background: #1e1e1e;
+        border-top: solid #3c3c3c;
     }
     #input_box {
-        background: #21262d;
-        border: solid #30363d;
-        color: #e6edf3;
+        background: #1e1e1e;
+        border: none;
+        color: #cccccc;
         height: 3;
+        padding: 1 0;
     }
     #input_box:focus {
-        border: solid #58a6ff;
+        border: none;
     }
     """
 
@@ -260,21 +257,21 @@ class MessengerApp(App):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        yield Label("🔴  Connecting...", id="connection_status")
+        yield Label("🔴 Offline", id="connection_status")
         yield Horizontal(
-            # ── Боковая панель ──
+            # ── Боковая панель (Explorer) ──
             Vertical(
-                Label("  CONTACTS", id="sidebar_header"),
+                Label("EXPLORER: PEERS", id="sidebar_header"),
                 ListView(id="sidebar"),
                 id="sidebar_panel",
             ),
-            # ── Область чата ──
+            # ── Область чата (Editor + Terminal) ──
             Vertical(
-                Label("  💬  Select a contact to start chatting", id="chat_header"),
+                Label("Select a peer to open communication channel...", id="chat_header"),
                 ScrollableContainer(id="messages_container"),
                 Vertical(
                     Input(
-                        placeholder="✉  Type a message...   (/send <path> to share a file)",
+                        placeholder="> Type a message or `/send path`...",
                         id="input_box",
                     ),
                     id="input_area",
@@ -292,7 +289,7 @@ class MessengerApp(App):
             self.start_network()
 
     def start_network(self) -> None:
-        self.title = f"SuperChat — {self.username}"
+        self.title = f"VS Code Chat [{self.username}]"
         self.network = NetworkEngine(self.username, self.server_host, self.server_port)
         self.network.on_contacts_update_callback = self.update_contacts_list
         self.network.on_message_callback = self.handle_new_message
@@ -302,19 +299,30 @@ class MessengerApp(App):
 
     def update_status(self, text: str) -> None:
         status_label = self.query_one("#connection_status", Label)
-        status_label.update(text)
+        
+        # Меняем цвет плашки в зависимости от статуса как в VS Code
+        if "Connected" in text:
+            status_label.styles.background = "#007acc"
+        else:
+            status_label.styles.background = "#cc6633"
+            
+        status_label.update(f"  {text}")
 
     def update_contacts_list(self) -> None:
         contacts = db.get_contacts()
         sidebar = self.query_one("#sidebar", ListView)
         sidebar.clear()
+        
+        # Системный контакт
         item_server = ListItem(
-            Label("🛠  Server (Echo)", classes="contact_item"), name="Server"
+            Label("⚙️ settings.json (Server)", classes="contact_item"), name="Server"
         )
         sidebar.append(item_server)
+        
+        # Пользователи
         for c in contacts:
             item = ListItem(
-                Label(f"👤  {c['username']}", classes="contact_item"),
+                Label(f"📄 {c['username']}.py", classes="contact_item"),
                 name=c["username"],
             )
             sidebar.append(item)
@@ -329,9 +337,12 @@ class MessengerApp(App):
         if not new_contact:
             return
 
-        # Обновляем заголовок чата
+        # Обновляем заголовок (вкладка открытого файла)
         header = self.query_one("#chat_header", Label)
-        header.update(f"  💬  {new_contact}")
+        if new_contact == "Server":
+            header.update(f"  settings.json ✕")
+        else:
+            header.update(f"  {new_contact}.py ✕")
 
         # Очищаем и загружаем историю
         container = self.query_one("#messages_container", ScrollableContainer)
@@ -353,7 +364,7 @@ class MessengerApp(App):
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         if not self.active_contact:
-            self.notify("Select a contact first!", severity="warning")
+            self.notify("Select a peer from the Explorer first!", severity="warning")
             return
 
         text = event.value.strip()
@@ -370,7 +381,6 @@ class MessengerApp(App):
         else:
             if text.startswith("/send "):
                 file_path = text[6:].strip()
-                import os
                 if os.path.exists(file_path):
                     self.notify(f"📎 Sending {os.path.basename(file_path)}...")
                     asyncio.create_task(
