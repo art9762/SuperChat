@@ -96,8 +96,8 @@ class MessengerApp(App):
         self.username = db.get_setting("username")
         self.network = None
         
-        # Hardcoded server address for now. You can change it.
-        self.server_host = "127.0.0.1"
+        # Дефолтный сервер
+        self.server_host = "cobyacoin.keenetic.link"
         self.server_port = 8888
 
     def compose(self) -> ComposeResult:

@@ -30,9 +30,12 @@ mkdir -p "$BIN_DIR"
 
 # Клонирование (или обновление) репозитория
 if [ -d "$INSTALL_DIR/.git" ]; then
-    echo "🔄 Обновление SuperChat..."
+    echo "🔄 Обновление (или полная переустановка) SuperChat..."
     cd "$INSTALL_DIR"
-    git pull origin main
+    # Очистка локальных изменений и жесткий сброс к удаленной ветке
+    git fetch --all
+    git reset --hard origin/main
+    git clean -fd
 else
     echo "📥 Загрузка исходного кода..."
     git clone https://github.com/art9762/SuperChat.git "$INSTALL_DIR"

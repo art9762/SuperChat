@@ -43,9 +43,11 @@ if (!(Test-Path $binDir)) {
 # Клонирование или обновление репозитория
 $gitDir = Join-Path $installDir ".git"
 if (Test-Path $gitDir) {
-    Write-Host "🔄 Обновление SuperChat..." -ForegroundColor Yellow
+    Write-Host "🔄 Обновление (или полная переустановка) SuperChat..." -ForegroundColor Yellow
     Set-Location $installDir
-    & git pull origin main
+    & git fetch --all
+    & git reset --hard origin/main
+    & git clean -fd
 } else {
     Write-Host "📥 Загрузка исходного кода..." -ForegroundColor Yellow
     & git clone https://github.com/art9762/SuperChat.git $installDir
