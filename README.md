@@ -16,10 +16,17 @@ docker run -d -p 8888:8888 --name superchat-server ghcr.io/art9762/superchat:lat
 ---
 
 ### 2. Установка Клиента (Мессенджера)
-Клиенту не нужен Docker. Для установки выполните **одну команду** в вашем терминале (MacOS / Linux):
+Клиенту не нужен Docker. Для установки скопируйте и выполните **одну команду** в вашем терминале (убедитесь, что у вас установлен `Python 3` и `Git`):
 
+**Для MacOS и Linux (bash/zsh):**
 ```bash
 curl -sSL https://raw.githubusercontent.com/art9762/SuperChat/main/install.sh | bash
+```
+
+**Для Windows (PowerShell):**
+Откройте PowerShell и вставьте команду:
+```powershell
+iwr -useb https://raw.githubusercontent.com/art9762/SuperChat/main/install.ps1 | iex
 ```
 
 Скрипт автоматически:
@@ -28,7 +35,7 @@ curl -sSL https://raw.githubusercontent.com/art9762/SuperChat/main/install.sh | 
 - Установит все зависимости.
 - Создаст исполняемую команду.
 
-После установки вы сможете запускать мессенджер из любого места командой:
+После установки вы сможете запускать мессенджер из любого места простой командой:
 ```bash
 superchat
 ```
