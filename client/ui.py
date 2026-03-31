@@ -1,49 +1,40 @@
 """
-superchat – CLI messenger in the style of Claude Code.
+superchat – terminal messenger built with urwid + asyncio.
 
-Layout (terminal, bottom-anchored input):
+Layout (no outer border – full-screen, like Claude Code):
 
-  ┌─ status bar ──────────────────────────────────────────────────┐
-  │  ● connected · superchat                                       │
-  └───────────────────────────────────────────────────────────────┘
+  ╔══════════════════════════════════════════════════════════════╗
+  ║  ◆ superchat  artem  ● connected                            ║  ← header bar
+  ╚══════════════════════════════════════════════════════════════╝
 
-  alice  14:32
-  hey, want to grab lunch?
+    type /help to see available commands
 
-  you  14:33
-  sure, give me 20 min
+    alice  14:32
+    hey, want to grab lunch?
 
-  ╭─ file received ──────────────────────────────────────────────╮
-  │  photo.png · 2.3 MB · ~/downloads/photo.png                  │
-  ╰──────────────────────────────────────────────────────────────╯
+    artem  14:33
+    sure, give me 20 min
 
-alice ›  _                            [bottom toolbar: ● connected · artem]
+    ╭─ file received ─────────────────────────────────────────╮
+    │  photo.png · 2.3 MB · ~/downloads/photo.png             │
+    ╰─────────────────────────────────────────────────────────╯
+
+  ──────────────────────────────────────────────────────────────  ← divider
+   alice › _                                                       ← input
 """
 
 import asyncio
 import logging
 import os
 import re
-import sys
 from datetime import datetime
 
-from prompt_toolkit import PromptSession
-from prompt_toolkit.completion import WordCompleter
-from prompt_toolkit.formatted_text import ANSI
-from prompt_toolkit.history import InMemoryHistory
-from prompt_toolkit.patch_stdout import patch_stdout
-
-from rich.console import Console
-from rich.panel import Panel
-from rich.text import Text
-from rich.columns import Columns
-from rich import box
-from rich.theme import Theme
+import urwid
 
 import db
 from network import NetworkEngine
 
-# ── logging → file only ──────────────────────────────────────────────────────
+# ── Logging → file only ──────────────────────────────────────────────────────
 _log_path = os.path.join(os.path.dirname(__file__), "superchat.log")
 logging.basicConfig(
     level=logging.INFO,
@@ -51,350 +42,410 @@ logging.basicConfig(
     handlers=[logging.FileHandler(_log_path)],
 )
 
-# ── Rich console ──────────────────────────────────────────────────────────────
-_theme = Theme({
-    "orange":  "color(214)",
-    "gray":    "color(245)",
-    "dimgray": "color(240)",
-    "green":   "color(76)",
-    "red":     "color(196)",
-    "yellow":  "color(220)",
-    "white":   "color(255)",
-    "mine":    "bold color(214)",
-    "theirs":  "bold color(255)",
-    "ts":      "dim color(240)",
-    "body":    "color(252)",
-    "cmd":     "color(214)",
-    "desc":    "color(245)",
-    "ruler":   "color(237)",
-})
-console = Console(theme=_theme, highlight=False)
-
-# ── ANSI for prompt_toolkit toolbar (prompt_toolkit doesn't use Rich) ─────────
-_R  = "\033[0m"
-_OR = "\033[38;5;214m"
-_GR = "\033[38;5;76m"
-_RE = "\033[38;5;196m"
-_YE = "\033[38;5;220m"
-_GY = "\033[38;5;245m"
-_B  = "\033[1m"
-
-# ── Server ────────────────────────────────────────────────────────────────────
 SERVER_HOST = "cobyacoin.keenetic.link"
 SERVER_PORT  = 8888
 
-# ── State ─────────────────────────────────────────────────────────────────────
-_username:       str | None = None
-_network:        NetworkEngine | None = None
-_active_contact: str | None = None
-_toolbar:        str = f"{_RE}● offline{_R}"
+# ── Colour palette ────────────────────────────────────────────────────────────
+# urwid palette: (name, foreground, background, mono, fg_high, bg_high)
+PALETTE = [
+    ("normal",        "light gray",  "black"),
+    # header bar
+    ("h_bg",          "light gray",  "dark gray"),
+    ("h_brand",       "yellow,bold", "dark gray"),
+    ("h_user",        "white",       "dark gray"),
+    ("h_sep",         "dark gray",   "dark gray"),
+    ("h_ok",          "light green", "dark gray"),
+    ("h_off",         "dark red",    "dark gray"),
+    ("h_yw",          "yellow",      "dark gray"),
+    # messages
+    ("mine_name",     "yellow,bold", "black"),
+    ("their_name",    "white,bold",  "black"),
+    ("ts",            "dark gray",   "black"),
+    ("body",          "light gray",  "black"),
+    ("dim",           "dark gray",   "black"),
+    # panels (tool blocks)
+    ("panel_or",      "yellow",      "black"),
+    ("panel_cy",      "dark cyan",   "black"),
+    ("panel_gr",      "light green", "black"),
+    ("panel_dim",     "dark gray",   "black"),
+    # inline labels
+    ("info",          "dark gray",   "black"),
+    ("warn",          "yellow",      "black"),
+    ("err",           "dark red",    "black"),
+    ("ok",            "light green", "black"),
+    # commands
+    ("cmd",           "yellow",      "black"),
+    ("cmd_desc",      "dark gray",   "black"),
+    # input
+    ("prompt_norm",   "dark gray",   "black"),
+    ("prompt_active", "yellow",      "black"),
+    ("divider",       "dark gray",   "black"),
+    # focus indicator (unused but required for urwid internals)
+    ("focus",         "black",       "yellow"),
+]
 
 
-# ── Output helpers ────────────────────────────────────────────────────────────
+# ── App ───────────────────────────────────────────────────────────────────────
 
-def _blank() -> None:
-    console.print()
+class SuperChat:
+    """
+    Wraps all UI state.  The asyncio event loop is shared with urwid via
+    urwid.AsyncioEventLoop, so ordinary create_task() calls work inside
+    both sync callbacks (handle_input) and async methods.
+    """
 
+    def __init__(self, username: str):
+        self.username = username
+        self.contact: str | None = None
+        self.network: NetworkEngine | None = None
+        self.mainloop: urwid.MainLoop | None = None
 
-def _ruler() -> None:
-    w = console.width
-    console.print(f"[ruler]{'─' * w}[/ruler]")
+        # ── Message area (scrollable) ─────────────────────────────────────
+        self._walker  = urwid.SimpleFocusListWalker([])
+        self._msglist = urwid.ListBox(self._walker)
 
+        # ── Header bar ────────────────────────────────────────────────────
+        self._h_text = urwid.Text([
+            ("h_brand", " ◆ superchat"),
+            ("h_sep",   "  ·  "),
+            ("h_user",  username),
+            ("h_sep",   "  "),
+            ("h_off",   "● offline"),
+        ])
+        self._header = urwid.AttrMap(self._h_text, "h_bg")
 
-def _msg(sender: str, text: str, ts: str = "", is_mine: bool = False) -> None:
-    """Render one chat message – Claude Code style: sender + time header, then text."""
-    ts = ts or datetime.now().strftime("%H:%M")
-    style = "mine" if is_mine else "theirs"
-    header = Text()
-    header.append(sender, style=style)
-    header.append(f"  {ts}", style="ts")
-    console.print(header)
-    # indent body slightly
-    console.print(Text("  " + text, style="body"))
-    console.print()
-
-
-def _event_panel(title: str, body: str, style: str = "gray") -> None:
-    """Render a bordered block – used for system events (file recv, connect, etc)."""
-    console.print(
-        Panel(
-            Text(body, style="body"),
-            title=f"[{style}]{title}[/{style}]",
-            title_align="left",
-            border_style=style,
-            box=box.ROUNDED,
-            padding=(0, 1),
-        )
-    )
-    console.print()
-
-
-def _info(text: str) -> None:
-    console.print(f"  [gray]{text}[/gray]")
-
-
-def _warn(text: str) -> None:
-    console.print(f"  [yellow]{text}[/yellow]")
-
-
-def _err(text: str) -> None:
-    console.print(f"  [red]{text}[/red]")
-
-
-def _ok(text: str) -> None:
-    console.print(f"  [green]{text}[/green]")
-
-
-# ── Help ──────────────────────────────────────────────────────────────────────
-
-def _print_help() -> None:
-    _blank()
-    cmds = [
-        ("/chat <user>",  "open or switch chat"),
-        ("/contacts",     "list online contacts"),
-        ("/history",      "reload message history for current chat"),
-        ("/send <file>",  "send a file to current contact"),
-        ("/back",         "close current chat"),
-        ("/help",         "show this help"),
-        ("/quit",         "exit superchat"),
-    ]
-    for cmd, desc in cmds:
-        line = Text()
-        line.append(f"  {cmd:<20}", style="cmd")
-        line.append(desc, style="desc")
-        console.print(line)
-    _blank()
-
-
-# ── Banner ────────────────────────────────────────────────────────────────────
-
-def _print_banner(username: str) -> None:
-    console.clear()
-    console.print(
-        Panel(
-            Text.assemble(
-                ("◆ superchat", "bold orange"),
-                ("  ", ""),
-                ("end-to-end encrypted messenger", "dimgray"),
+        # ── Input area ────────────────────────────────────────────────────
+        self._edit = urwid.Edit(caption=("prompt_norm", " › "))
+        self._divider = urwid.AttrMap(urwid.Divider("─"), "divider")
+        self._footer = urwid.Pile([
+            self._divider,
+            urwid.AttrMap(
+                urwid.Padding(self._edit, left=0, right=0),
+                "normal"
             ),
-            border_style="orange",
-            box=box.HEAVY,
-            padding=(0, 1),
+        ])
+
+        # ── Top-level frame ───────────────────────────────────────────────
+        self.frame = urwid.Frame(
+            body=self._msglist,
+            header=self._header,
+            footer=self._footer,
+            focus_part="footer",
         )
-    )
-    console.print(f"  [gray]logged in as[/gray] [bold orange]{username}[/bold orange]")
-    _blank()
 
+    # ─────────────────────────── rendering helpers ───────────────────────────
 
-# ── History ───────────────────────────────────────────────────────────────────
+    def _redraw(self):
+        if self.mainloop:
+            self.mainloop.draw_screen()
 
-def _load_history(contact: str) -> None:
-    msgs = db.get_messages(contact)
-    if not msgs:
-        _info("(no history yet)")
-        return
-    for m in msgs:
-        is_mine = m["sender"] == _username
-        raw_ts  = m["timestamp"] or ""
-        ts      = raw_ts.split(" ")[-1][:5] if raw_ts else ""
-        _msg(m["sender"], m["text"], ts, is_mine)
+    def _append(self, widget: urwid.Widget):
+        self._walker.append(widget)
+        if self._walker:
+            self._msglist.set_focus(len(self._walker) - 1)
 
+    def _blank(self):
+        self._append(urwid.Text(""))
 
-# ── Network callbacks ─────────────────────────────────────────────────────────
+    def _separator(self):
+        self._append(urwid.AttrMap(urwid.Divider("─"), "dim"))
 
-def _on_message(contact: str, text: str, is_mine: bool = False) -> None:
-    if contact != _active_contact:
-        # background notification
-        sender = _username if is_mine else contact
-        preview = text[:55] + "…" if len(text) > 55 else text
-        _event_panel(f"new message from {contact}", preview, style="dimgray")
-        return
-    sender = _username if is_mine else contact
-    _msg(sender, text, is_mine=is_mine)
+    def add_msg(self, sender: str, text: str, ts: str = "", is_mine: bool = False):
+        ts = ts or datetime.now().strftime("%H:%M")
+        name_attr = "mine_name" if is_mine else "their_name"
+        self._append(urwid.Text([
+            "  ",
+            (name_attr, sender),
+            "  ",
+            ("ts", ts),
+        ]))
+        self._append(urwid.Text([
+            ("body", "  " + text),
+        ]))
+        self._blank()
+        self._redraw()
 
+    def add_panel(self, title: str, content: str, color: str = "panel_cy"):
+        """Rounded bordered block – like Claude Code's tool-use blocks."""
+        self._append(urwid.Text([
+            (color, f"  ╭─ {title} "),
+            ("dim",  "─" * max(0, 52 - len(title))),
+            (color, "╮"),
+        ]))
+        self._append(urwid.Text([
+            (color,  "  │ "),
+            ("body",  content),
+        ]))
+        self._append(urwid.Text([
+            (color, "  ╰"),
+            ("dim",  "─" * 54),
+            (color, "╯"),
+        ]))
+        self._blank()
+        self._redraw()
 
-def _on_contacts_update() -> None:
-    contacts = db.get_contacts()
-    if contacts:
-        names = ", ".join(c["username"] for c in contacts)
-        _info(f"contacts updated: {names}")
+    def add_info(self, text: str):
+        self._append(urwid.Text([("info", "  " + text)]))
+        self._redraw()
 
+    def add_warn(self, text: str):
+        self._append(urwid.Text([("warn", "  ⚠ " + text)]))
+        self._redraw()
 
-def _on_status(raw: str) -> None:
-    global _toolbar
-    clean = re.sub(r"[^\x20-\x7E]", "", raw).strip().lower()
+    def add_err(self, text: str):
+        self._append(urwid.Text([("err", "  ✗ " + text)]))
+        self._redraw()
 
-    if "connected" in raw:
-        color, dot = _GR, "●"
-    elif "connecting" in raw:
-        color, dot = _YE, "◌"
-    else:
-        color, dot = _RE, "●"
+    def add_ok(self, text: str):
+        self._append(urwid.Text([("ok", "  ✓ " + text)]))
+        self._redraw()
 
-    _toolbar = f"{color}{dot} {clean}{_R}"
+    def _set_header_status(self, raw: str):
+        clean = re.sub(r"[^\x20-\x7E]", "", raw).strip().lower()
+        if "connected" in raw:
+            attr, dot = "h_ok", "●"
+        elif "connecting" in raw:
+            attr, dot = "h_yw", "◌"
+        else:
+            attr, dot = "h_off", "●"
 
+        self._h_text.set_text([
+            ("h_brand", " ◆ superchat"),
+            ("h_sep",   "  ·  "),
+            ("h_user",  self.username),
+            ("h_sep",   "  "),
+            (attr,      f"{dot} {clean}"),
+        ])
+        self._redraw()
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+    def _set_prompt(self):
+        if self.contact:
+            self._edit.set_caption(("prompt_active", f" {self.contact} › "))
+        else:
+            self._edit.set_caption(("prompt_norm", " › "))
+        self._redraw()
 
-async def main() -> None:
-    global _username, _network, _active_contact
+    # ─────────────────────────── input handling ──────────────────────────────
 
-    db.init_db()
-    _username = db.get_setting("username")
+    def handle_input(self, key: str):
+        if key == "enter":
+            text = self._edit.edit_text.strip()
+            self._edit.set_edit_text("")
+            if text:
+                loop = asyncio.get_event_loop()
+                loop.create_task(self._dispatch(text))
 
-    # ── First run: ask for username (before Rich takes over stdout) ───────────
-    if not _username:
-        try:
-            raw = input(f"\n  {_GY}username{_R} › ").strip()
-        except (EOFError, KeyboardInterrupt):
-            return
-        if not raw:
-            print(f"  {_RE}username cannot be empty{_R}")
-            return
-        _username = raw
-        db.save_setting("username", _username)
+        elif key in ("ctrl c", "ctrl d"):
+            raise urwid.ExitMainLoop()
 
-    _print_banner(_username)
+    async def _dispatch(self, text: str):
+        # ── quit ─────────────────────────────────────────────────────────
+        if text in ("/quit", "/exit", "q"):
+            raise urwid.ExitMainLoop()
 
-    # ── Network ───────────────────────────────────────────────────────────────
-    _network = NetworkEngine(_username, SERVER_HOST, SERVER_PORT)
-    _network.on_message_callback         = _on_message
-    _network.on_contacts_update_callback = _on_contacts_update
-    _network.on_status_change_callback   = _on_status
-    asyncio.create_task(_network.start())
+        # ── help ─────────────────────────────────────────────────────────
+        elif text == "/help":
+            self._blank()
+            rows = [
+                ("/chat <user>",  "open or switch chat"),
+                ("/contacts",     "list online contacts"),
+                ("/history",      "reload chat history"),
+                ("/send <file>",  "send file to current contact"),
+                ("/back",         "close current chat"),
+                ("/help",         "show this help"),
+                ("/quit",         "exit superchat"),
+            ]
+            for cmd, desc in rows:
+                self._append(urwid.Text([
+                    ("cmd",      f"  {cmd:<22}"),
+                    ("cmd_desc", desc),
+                ]))
+            self._blank()
 
-    _print_help()
-
-    # ── REPL ──────────────────────────────────────────────────────────────────
-    completer = WordCompleter(
-        ["/chat", "/contacts", "/history", "/send", "/back", "/help", "/quit"],
-        pattern=re.compile(r"(/\w*)"),
-    )
-    session: PromptSession = PromptSession(
-        history=InMemoryHistory(),
-        completer=completer,
-    )
-
-    with patch_stdout():
-        while True:
-            # ── build prompt ──────────────────────────────────────────────────
-            if _active_contact:
-                prompt_str = f"{_OR}{_active_contact}{_R} › "
+        # ── contacts ─────────────────────────────────────────────────────
+        elif text == "/contacts":
+            contacts = db.get_contacts()
+            if not contacts:
+                self.add_info("no contacts online yet")
             else:
-                prompt_str = f"{_GY}›{_R} "
+                self._blank()
+                for c in contacts:
+                    self._append(urwid.Text([
+                        ("dim",  "  ◇  "),
+                        ("body", c["username"]),
+                    ]))
+                self._blank()
 
-            toolbar_str = (
-                f"  {_toolbar}   "
-                f"{_GY}{_username}{_R}"
+        # ── /chat <user> ─────────────────────────────────────────────────
+        elif text.startswith("/chat "):
+            target = text[6:].strip()
+            if not target:
+                self.add_err("usage: /chat <username>")
+                return
+            self.contact = target
+            self._set_prompt()
+            self._blank()
+            self._append(urwid.Text([
+                ("dim",       "  chatting with "),
+                ("mine_name", target),
+            ]))
+            self._blank()
+            self._load_history(target)
+
+        # ── /back ────────────────────────────────────────────────────────
+        elif text == "/back":
+            self.contact = None
+            self._set_prompt()
+            self.add_info("chat closed")
+
+        # ── /history ─────────────────────────────────────────────────────
+        elif text == "/history":
+            if not self.contact:
+                self.add_warn("no active chat — use /chat <user> first")
+            else:
+                self._separator()
+                self._load_history(self.contact)
+                self._separator()
+
+        # ── /send <file> ─────────────────────────────────────────────────
+        elif text.startswith("/send "):
+            if not self.contact:
+                self.add_warn("no active chat — use /chat <user> first")
+                return
+            fp = text[6:].strip()
+            if not os.path.exists(fp):
+                self.add_err(f"file not found: {fp}")
+                return
+            name     = os.path.basename(fp)
+            size     = os.path.getsize(fp)
+            size_str = (
+                f"{size / 1_048_576:.1f} MB"
+                if size >= 1_048_576
+                else f"{size / 1024:.1f} KB"
+            )
+            self.add_panel(
+                "sending file",
+                f"{name} · {size_str} → {self.contact}",
+                color="panel_or",
+            )
+            await self.network.send_message(
+                self.contact, "", is_file=True, file_path=fp
             )
 
-            try:
-                raw = await session.prompt_async(
-                    ANSI(prompt_str),
-                    bottom_toolbar=ANSI(toolbar_str),
-                )
-            except (EOFError, KeyboardInterrupt):
-                break
+        # ── unknown command ───────────────────────────────────────────────
+        elif text.startswith("/"):
+            self.add_err(f"unknown command: {text}")
+            self.add_info("type /help for available commands")
 
-            text = raw.strip()
-            if not text:
-                continue
-
-            # ── commands ──────────────────────────────────────────────────────
-            if text in ("/quit", "/exit", "q"):
-                break
-
-            elif text == "/help":
-                _print_help()
-
-            elif text == "/contacts":
-                contacts = db.get_contacts()
-                if not contacts:
-                    _info("no contacts online yet")
-                else:
-                    _blank()
-                    for c in contacts:
-                        t = Text()
-                        t.append("  ◇  ", style="dimgray")
-                        t.append(c["username"], style="white")
-                        console.print(t)
-                    _blank()
-
-            elif text.startswith("/chat "):
-                target = text[6:].strip()
-                if not target:
-                    _err("usage: /chat <username>")
-                    continue
-                _active_contact = target
-                _blank()
-                console.print(
-                    f"  [gray]opened chat with[/gray] "
-                    f"[bold orange]{target}[/bold orange]"
-                )
-                _blank()
-                _load_history(target)
-
-            elif text == "/back":
-                _active_contact = None
-                _info("chat closed")
-
-            elif text == "/history":
-                if not _active_contact:
-                    _warn("no active chat — use /chat <user> first")
-                else:
-                    _ruler()
-                    _load_history(_active_contact)
-                    _ruler()
-
-            elif text.startswith("/send "):
-                if not _active_contact:
-                    _warn("no active chat — use /chat <user> first")
-                else:
-                    file_path = text[6:].strip()
-                    if not os.path.exists(file_path):
-                        _err(f"file not found: {file_path}")
-                    else:
-                        name = os.path.basename(file_path)
-                        size = os.path.getsize(file_path)
-                        size_str = (
-                            f"{size / 1_048_576:.1f} MB"
-                            if size >= 1_048_576
-                            else f"{size / 1024:.1f} KB"
-                        )
-                        _event_panel(
-                            "sending file",
-                            f"{name} · {size_str} → {_active_contact}",
-                            style="yellow",
-                        )
-                        asyncio.create_task(
-                            _network.send_message(
-                                _active_contact, "", is_file=True, file_path=file_path
-                            )
-                        )
-
-            elif text.startswith("/"):
-                _err(f"unknown command: {text}")
-                _info("type /help for available commands")
-
-            # ── plain text = send message ─────────────────────────────────────
+        # ── plain text = message ──────────────────────────────────────────
+        else:
+            if not self.contact:
+                self.add_warn("no active chat — use /chat <user> first")
+                return
+            if self.contact == "Server":
+                self.add_msg(self.username, text, is_mine=True)
+                self.add_msg("Server", f"Echo: {text}")
+                db.save_message("Server", self.username, text)
+                db.save_message("Server", "Server", f"Echo: {text}")
             else:
-                if not _active_contact:
-                    _warn("no active chat — use /chat <user> first")
-                    continue
+                await self.network.send_message(self.contact, text)
 
-                if _active_contact == "Server":
-                    _msg(_username, text, is_mine=True)
-                    _msg("Server", f"Echo: {text}")
-                    db.save_message("Server", _username, text)
-                    db.save_message("Server", "Server", f"Echo: {text}")
-                else:
-                    # send_message fires _on_message callback → prints message
-                    asyncio.create_task(_network.send_message(_active_contact, text))
+        self._redraw()
 
-    _blank()
-    _info("goodbye")
-    _blank()
+    def _load_history(self, contact: str):
+        msgs = db.get_messages(contact)
+        if not msgs:
+            self.add_info("(no history yet)")
+            return
+        for m in msgs:
+            is_mine = m["sender"] == self.username
+            raw_ts  = m["timestamp"] or ""
+            ts      = raw_ts.split(" ")[-1][:5] if raw_ts else ""
+            self.add_msg(m["sender"], m["text"], ts, is_mine)
+
+    # ─────────────────────────── network callbacks ───────────────────────────
+
+    def on_message(self, contact: str, text: str, is_mine: bool = False):
+        if contact != self.contact:
+            preview = text[:50] + "…" if len(text) > 50 else text
+            self.add_panel(
+                f"new message · {contact}",
+                preview,
+                color="panel_dim",
+            )
+            return
+        sender = self.username if is_mine else contact
+        self.add_msg(sender, text, is_mine=is_mine)
+
+    def on_contacts_update(self):
+        contacts = db.get_contacts()
+        if contacts:
+            names = "  ·  ".join(c["username"] for c in contacts)
+            self.add_info(f"online: {names}")
+
+    def on_status(self, raw: str):
+        self._set_header_status(raw)
+
+    # ─────────────────────────── startup ────────────────────────────────────
+
+    async def start_network(self):
+        self.network = NetworkEngine(self.username, SERVER_HOST, SERVER_PORT)
+        self.network.on_message_callback         = self.on_message
+        self.network.on_contacts_update_callback = self.on_contacts_update
+        self.network.on_status_change_callback   = self.on_status
+        await self.network.start()
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+def main():
+    db.init_db()
+    username = db.get_setting("username")
+
+    if not username:
+        print()
+        try:
+            username = input("  username › ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return
+        if not username:
+            print("  username cannot be empty")
+            return
+        db.save_setting("username", username)
+        print()
+
+    app = SuperChat(username)
+
+    # ── Welcome message ───────────────────────────────────────────────────────
+    app._blank()
+    app._append(urwid.Text([
+        ("dim",  "  type "),
+        ("cmd",  "/help"),
+        ("dim",  " to see available commands"),
+    ]))
+    app._blank()
+
+    # ── Asyncio + urwid event loop integration ────────────────────────────────
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    evl = urwid.AsyncioEventLoop(loop=loop)
+    mainloop = urwid.MainLoop(
+        app.frame,
+        PALETTE,
+        event_loop=evl,
+        unhandled_input=app.handle_input,
+    )
+    app.mainloop = mainloop
+
+    # Schedule network start – will run once the event loop starts
+    loop.create_task(app.start_network())
+
+    try:
+        mainloop.run()
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
