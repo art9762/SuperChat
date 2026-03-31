@@ -9,9 +9,18 @@ on:
   pull_request:
     branches: [ "main" ]
 
+env:
+  REGISTRY: ghcr.io
+  # Формируем название образа в стиле: ghcr.io/имя_владельца/имя_репозитория
+  IMAGE_NAME: ${{ github.repository }}
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      # Необходимо для аутентификации в GHCR (GitHub Packages)
+      contents: read
+      packages: write
 
     steps:
     - name: Checkout repository
@@ -24,13 +33,13 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v2
 
-    - name: Login to Docker Hub
+    - name: Log in to the Container registry
       uses: docker/login-action@v2
       with:
-        # Для публикации образа нужно добавить DOCKERHUB_USERNAME и DOCKERHUB_TOKEN 
-        # в секреты репозитория GitHub (Settings -> Secrets -> Actions)
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
+        registry: ${{ env.REGISTRY }}
+        # Встроенный токен авторизации GitHub
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Build and push Docker image
       uses: docker/build-push-action@v4
@@ -39,7 +48,5 @@ jobs:
         file: ./server/Dockerfile
         # Сборка сразу под x86 (для обычных серверов) и ARM64 (для Raspberry Pi и Apple Silicon)
         platforms: linux/amd64,linux/arm64
-        # Используем логин, переданный через секрет, для формирования тега
-        # Push только если это коммит в main ветку.
         push: ${{ github.event_name != 'pull_request' }}
-        tags: ${{ secrets.DOCKERHUB_USERNAME }}/messenger-server:latest
+        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
