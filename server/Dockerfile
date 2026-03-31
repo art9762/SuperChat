@@ -1,28 +1,23 @@
-# Базовый образ на основе Alpine для экономии места.
-# Для Apple Silicon (M1/M2) Docker автоматически скачает arm64 версию образа.
-# Используем образ с предустановленными зависимостями для сборки cryptography (gcc, musl-dev, libffi-dev, openssl-dev)
-FROM python:3.11-alpine
+# Используем slim-версию (Debian-based), а не alpine.
+# Это позволит избежать компиляции C-расширений пакета `cryptography` с нуля
+# (в Debian есть предварительно скомпилированные wheel-пакеты (manylinux) для linux/amd64 и linux/arm64).
+# Alpine использует musl, из-за чего wheel часто недоступны.
+FROM python:3.11-slim
 
 # Устанавливаем рабочую директорию
 WORKDIR /app
 
-# Устанавливаем системные зависимости, необходимые для сборки пакета cryptography
-RUN apk add --no-cache gcc musl-dev libffi-dev openssl-dev cargo rust
-
 # Копируем файл с зависимостями
 COPY requirements.txt .
 
-# Обновляем pip и устанавливаем зависимости сервера
+# Устанавливаем зависимости сервера (используются готовые wheel-бинарники)
 RUN pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
-
-# Теперь можно удалить тяжелые сборочные зависимости (cargo, rust), чтобы уменьшить размер образа
-RUN apk del cargo rust gcc musl-dev
 
 # Копируем исходный код сервера
 COPY server.py .
 
-# Открываем порт, на котором сервер слушает входящие соединения
+# Открываем порт
 EXPOSE 8888
 
 # Запускаем сервер
