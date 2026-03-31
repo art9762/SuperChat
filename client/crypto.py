@@ -43,32 +43,66 @@ class CryptoManager:
         ).decode()
 
     def encrypt_for(self, public_key_pem, message: str) -> str:
-        """Шифрует сообщение чужим публичным ключом."""
+        """Шифрует сообщение чужим публичным ключом.
+        Так как RSA ограничен по размеру (2048 бит = ~256 байт на сообщение),
+        мы используем гибридное шифрование: генерируем ключ AES (Fernet),
+        шифруем им сообщение, а сам ключ шифруем через RSA собеседника.
+        """
+        from cryptography.fernet import Fernet
+        
+        # 1. Генерируем симметричный ключ (AES) для сессии/сообщения
+        sym_key = Fernet.generate_key()
+        f = Fernet(sym_key)
+        
+        # 2. Шифруем само длинное сообщение/файл с помощью Fernet
+        encrypted_data = f.encrypt(message.encode())
+        
+        # 3. Шифруем сам симметричный ключ публичным RSA ключом собеседника
         pub_key = serialization.load_pem_public_key(
             public_key_pem.encode(),
             backend=default_backend()
         )
-        encrypted = pub_key.encrypt(
-            message.encode(),
+        encrypted_sym_key = pub_key.encrypt(
+            sym_key,
             padding.OAEP(
                 mgf=padding.MGF1(algorithm=hashes.SHA256()),
                 algorithm=hashes.SHA256(),
                 label=None
             )
         )
-        return base64.b64encode(encrypted).decode()
+        
+        # 4. Склеиваем и кодируем в Base64 для передачи:
+        # Формат: [Длина зашифрованного ключа (4 байта)] + [Зашифрованный ключ] + [Зашифрованные данные]
+        length_bytes = len(encrypted_sym_key).to_bytes(4, byteorder='big')
+        final_payload = length_bytes + encrypted_sym_key + encrypted_data
+        
+        return base64.b64encode(final_payload).decode()
 
     def decrypt(self, encrypted_message_b64: str) -> str:
-        """Расшифровывает сообщение своим приватным ключом."""
-        encrypted_data = base64.b64decode(encrypted_message_b64)
-        decrypted = self.private_key.decrypt(
-            encrypted_data,
+        """Расшифровывает сообщение (гибридное шифрование RSA+AES)."""
+        from cryptography.fernet import Fernet
+        raw_payload = base64.b64decode(encrypted_message_b64)
+        
+        # 1. Достаем длину RSA-зашифрованного ключа
+        key_length = int.from_bytes(raw_payload[:4], byteorder='big')
+        
+        # 2. Разделяем на ключ и данные
+        encrypted_sym_key = raw_payload[4:4+key_length]
+        encrypted_data = raw_payload[4+key_length:]
+        
+        # 3. Расшифровываем симметричный ключ своим приватным RSA ключом
+        sym_key = self.private_key.decrypt(
+            encrypted_sym_key,
             padding.OAEP(
                 mgf=padding.MGF1(algorithm=hashes.SHA256()),
                 algorithm=hashes.SHA256(),
                 label=None
             )
         )
+        
+        # 4. Расшифровываем данные с помощью извлеченного AES (Fernet) ключа
+        f = Fernet(sym_key)
+        decrypted = f.decrypt(encrypted_data)
         return decrypted.decode()
 
     def decrypt_sym_key(self, encrypted_sym_key_hex: str) -> bytes:

@@ -207,8 +207,18 @@ class MessengerApp(App):
             db.save_message("Server", self.username, text)
             db.save_message("Server", "Server", f"Echo: {text}")
         else:
-            # Отправляем сообщение асинхронно другому пользователю
-            asyncio.create_task(self.network.send_message(self.active_contact, text))
+            # Проверка на команду отправки файла
+            if text.startswith("/send "):
+                file_path = text[6:].strip()
+                import os
+                if os.path.exists(file_path):
+                    self.notify(f"Sending file {os.path.basename(file_path)}...")
+                    asyncio.create_task(self.network.send_message(self.active_contact, "", is_file=True, file_path=file_path))
+                else:
+                    self.notify(f"File not found: {file_path}", severity="error")
+            else:
+                # Отправляем текстовое сообщение асинхронно другому пользователю
+                asyncio.create_task(self.network.send_message(self.active_contact, text))
 
 if __name__ == "__main__":
     app = MessengerApp()

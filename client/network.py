@@ -121,25 +121,64 @@ class NetworkEngine:
         """Обработка входящего сообщения (P2P или Relay). Расшифровка."""
         try:
             decrypted_text = self.crypto.decrypt(encrypted_payload)
-            db.save_message(sender, sender, decrypted_text)
-            logging.info(f"New message from {sender}: {decrypted_text}")
-            if self.on_message_callback:
-                self.on_message_callback(sender, decrypted_text)
+            
+            # Проверяем, является ли сообщение файлом (JSON формат: {"file": "name.jpg", "data_b64": "..."})
+            if decrypted_text.startswith('{"file":') and "data_b64" in decrypted_text:
+                import os
+                import base64
+                file_msg = json.loads(decrypted_text)
+                filename = file_msg.get("file")
+                file_data_b64 = file_msg.get("data_b64")
+                
+                # Создаем папку загрузок
+                downloads_dir = os.path.join(os.path.expanduser("~"), ".superchat", "downloads")
+                os.makedirs(downloads_dir, exist_ok=True)
+                
+                file_path = os.path.join(downloads_dir, filename)
+                with open(file_path, "wb") as f:
+                    f.write(base64.b64decode(file_data_b64))
+                
+                display_text = f"[📎 Получен файл: {filename}] (сохранен в {downloads_dir})"
+                db.save_message(sender, sender, display_text)
+                if self.on_message_callback:
+                    self.on_message_callback(sender, display_text)
+            else:
+                db.save_message(sender, sender, decrypted_text)
+                logging.info(f"New message from {sender}: {decrypted_text}")
+                if self.on_message_callback:
+                    self.on_message_callback(sender, decrypted_text)
         except Exception as e:
             logging.error(f"Failed to decrypt message from {sender}: {e}")
 
-    async def send_message(self, target_username, text):
-        """Отправка сообщения. Сначала пробуем P2P, затем через сервер."""
+    async def send_message(self, target_username, text, is_file=False, file_path=None):
+        """Отправка сообщения или файла. Сначала пробуем P2P, затем через сервер."""
         contact = db.get_contact(target_username)
         if not contact:
             logging.error(f"Cannot send to {target_username}: unknown contact")
             return False
 
-        db.save_message(target_username, self.username, text)
-        if self.on_message_callback:
-            self.on_message_callback(target_username, text, is_mine=True)
+        if is_file and file_path:
+            import os
+            import base64
+            if not os.path.exists(file_path):
+                return False
+            
+            filename = os.path.basename(file_path)
+            with open(file_path, "rb") as f:
+                file_data = f.read()
+                
+            file_b64 = base64.b64encode(file_data).decode()
+            payload_text = json.dumps({"file": filename, "data_b64": file_b64})
+            display_text = f"[📎 Отправлен файл: {filename}]"
+        else:
+            payload_text = text
+            display_text = text
 
-        encrypted_text = self.crypto.encrypt_for(contact["public_key"], text)
+        db.save_message(target_username, self.username, display_text)
+        if self.on_message_callback:
+            self.on_message_callback(target_username, display_text, is_mine=True)
+
+        encrypted_text = self.crypto.encrypt_for(contact["public_key"], payload_text)
 
         # Пробуем P2P
         ip = contact.get("ip")
