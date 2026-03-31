@@ -82,6 +82,13 @@ class MessengerApp(App):
     .contact_item {
         padding: 1;
     }
+    #connection_status {
+        width: 100%;
+        text-align: center;
+        background: $boost;
+        color: $text;
+        text-style: bold;
+    }
     """
 
     BINDINGS = [
@@ -102,6 +109,8 @@ class MessengerApp(App):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
+        # Плашка состояния подключения под Header-ом
+        yield Label("🔴 Offline", id="connection_status")
         yield Horizontal(
             ListView(id="sidebar"),
             Vertical(
@@ -126,10 +135,16 @@ class MessengerApp(App):
         # Callbacks
         self.network.on_contacts_update_callback = self.update_contacts_list
         self.network.on_message_callback = self.handle_new_message
+        self.network.on_status_change_callback = self.update_status
         
         # Запускаем сетевой движок в фоне
         asyncio.create_task(self.network.start())
         self.update_contacts_list()
+
+    def update_status(self, text):
+        # Textual умеет автоматически маршрутизировать вызовы UI, но для надежности обновим напрямую
+        status_label = self.query_one("#connection_status", Label)
+        status_label.update(text)
 
     def update_contacts_list(self):
         # Поскольку network.py работает в том же event_loop через asyncio,
@@ -137,6 +152,11 @@ class MessengerApp(App):
         contacts = db.get_contacts()
         sidebar = self.query_one("#sidebar", ListView)
         sidebar.clear()
+        
+        # Добавим системный контакт "Server" (для проверки)
+        item_server = ListItem(Label("🛠 Server (Echo)", classes="contact_item"), name="Server")
+        sidebar.append(item_server)
+        
         for c in contacts:
             item = ListItem(Label(c["username"], classes="contact_item"), name=c["username"])
             sidebar.append(item)
@@ -179,8 +199,16 @@ class MessengerApp(App):
             return
             
         event.input.value = ""
-        # Отправляем сообщение асинхронно
-        asyncio.create_task(self.network.send_message(self.active_contact, text))
+        
+        if self.active_contact == "Server":
+            # Имитация общения с сервером (локальное эхо)
+            self.handle_new_message("Server", text, is_mine=True)
+            self.handle_new_message("Server", f"Echo: {text}", is_mine=False)
+            db.save_message("Server", self.username, text)
+            db.save_message("Server", "Server", f"Echo: {text}")
+        else:
+            # Отправляем сообщение асинхронно другому пользователю
+            asyncio.create_task(self.network.send_message(self.active_contact, text))
 
 if __name__ == "__main__":
     app = MessengerApp()

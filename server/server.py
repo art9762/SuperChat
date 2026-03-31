@@ -69,6 +69,13 @@ class MessengerServer:
                     # Сообщение должно быть переслано другому пользователю через сервер
                     # Структура: {"type": "relay", "to": "username", "payload": "encrypted_data", "from": "username"}
                     target = message.get("to")
+                    if target == "Server":
+                        # Если сообщение адресовано самому серверу (echo), мы можем его залогировать,
+                        # но отвечать будет сложно, так как payload зашифрован.
+                        # Локальный эхо-бот в клиенте (ui.py) сам отвечает на этот контакт.
+                        logging.info(f"Received ping to Server from {username}")
+                        continue
+                        
                     if target in self.clients:
                         target_client = self.clients[target]
                         relay_msg = json.dumps({

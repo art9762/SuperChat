@@ -18,6 +18,7 @@ class NetworkEngine:
         self.server_writer = None
         self.on_message_callback = None
         self.on_contacts_update_callback = None
+        self.on_status_change_callback = None  # Новый коллбек
 
     async def start(self):
         # Стартуем P2P сервер
@@ -34,10 +35,14 @@ class NetworkEngine:
 
     async def connect_to_server(self):
         while True:
+            if self.on_status_change_callback:
+                self.on_status_change_callback("🟡 Connecting...")
             try:
                 reader, writer = await asyncio.open_connection(self.server_host, self.server_port)
                 self.server_writer = writer
                 logging.info(f"Connected to central server at {self.server_host}:{self.server_port}")
+                if self.on_status_change_callback:
+                    self.on_status_change_callback("🟢 Connected")
                 
                 # Регистрируемся
                 reg_msg = json.dumps({
@@ -66,6 +71,8 @@ class NetworkEngine:
             except Exception as e:
                 logging.error(f"Lost connection to server: {e}. Reconnecting in 5s...")
                 self.server_writer = None
+                if self.on_status_change_callback:
+                    self.on_status_change_callback("🔴 Disconnected (Retrying...)")
                 await asyncio.sleep(5)
 
     def handle_users_update(self, message):
