@@ -41,6 +41,10 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Convert image name to lowercase
+      run: |
+        echo "IMAGE_NAME_LOWERCASE=$(echo ${{ env.IMAGE_NAME }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
     - name: Build and push Docker image
       uses: docker/build-push-action@v4
       with:
@@ -49,4 +53,4 @@ jobs:
         # Сборка сразу под x86 (для обычных серверов) и ARM64 (для Raspberry Pi и Apple Silicon)
         platforms: linux/amd64,linux/arm64
         push: ${{ github.event_name != 'pull_request' }}
-        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWERCASE }}:latest

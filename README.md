@@ -15,24 +15,23 @@ docker run -d -p 8888:8888 --name superchat-server ghcr.io/art9762/superchat:lat
 
 ---
 
-### 2. Как запустить Клиент (UI)
-Клиенту не нужен Docker. Для работы вам потребуется Python версии 3.10 или выше.
+### 2. Установка Клиента (Мессенджера)
+Клиенту не нужен Docker. Для установки выполните **одну команду** в вашем терминале (MacOS / Linux):
 
-1. Склонируйте репозиторий на свой компьютер:
-   ```bash
-   git clone https://github.com/art9762/SuperChat.git
-   cd SuperChat
-   ```
-2. Создайте виртуальное окружение и установите зависимости:
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   pip install -r client/requirements.txt
-   ```
-3. Запустите мессенджер:
-   ```bash
-   python3 client/ui.py
-   ```
+```bash
+curl -sSL https://raw.githubusercontent.com/art9762/SuperChat/main/install.sh | bash
+```
+
+Скрипт автоматически:
+- Скачает мессенджер в `~/.superchat`.
+- Настроит изолированное Python окружение.
+- Установит все зависимости.
+- Создаст исполняемую команду.
+
+После установки вы сможете запускать мессенджер из любого места командой:
+```bash
+superchat
+```
 
 *Примечание: По умолчанию клиент подключается к серверу `127.0.0.1:8888`. Если ваш сервер находится в сети интернет, отредактируйте `client/ui.py` (строку `self.server_host = "127.0.0.1"`) на IP-адрес вашего сервера.*
 
