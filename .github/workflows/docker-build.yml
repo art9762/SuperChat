@@ -39,7 +39,7 @@ jobs:
         file: ./server/Dockerfile
         # Сборка сразу под x86 (для обычных серверов) и ARM64 (для Raspberry Pi и Apple Silicon)
         platforms: linux/amd64,linux/arm64
-        # Замени yourusername/messenger-server на свой репозиторий Docker Hub.
-        # Push только если это коммит в main ветку и добавлены секреты (по умолчанию отключено в PR).
+        # Используем логин, переданный через секрет, для формирования тега
+        # Push только если это коммит в main ветку.
         push: ${{ github.event_name != 'pull_request' }}
-        tags: yourusername/messenger-server:latest
+        tags: ${{ secrets.DOCKERHUB_USERNAME }}/messenger-server:latest
