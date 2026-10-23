@@ -202,9 +202,9 @@ class SuperChat:
 
     def _set_header_status(self, raw: str):
         clean = re.sub(r"[^\x20-\x7E]", "", raw).strip().lower()
-        if "connected" in raw:
+        if clean.startswith("connected"):
             attr, dot = "h_ok", "●"
-        elif "connecting" in raw:
+        elif clean.startswith("connecting"):
             attr, dot = "h_yw", "◌"
         else:
             attr, dot = "h_off", "●"
@@ -328,9 +328,11 @@ class SuperChat:
                 f"{name} · {size_str} → {self.contact}",
                 color="panel_or",
             )
-            await self.network.send_message(
+            sent = await self.network.send_message(
                 self.contact, "", is_file=True, file_path=fp
             )
+            if not sent:
+                self.add_err("file was not sent — check the connection, file path and 10 MiB limit")
 
         # ── unknown command ───────────────────────────────────────────────
         elif text.startswith("/"):
@@ -348,7 +350,8 @@ class SuperChat:
                 db.save_message("Server", self.username, text)
                 db.save_message("Server", "Server", f"Echo: {text}")
             else:
-                await self.network.send_message(self.contact, text)
+                if not await self.network.send_message(self.contact, text):
+                    self.add_err("message was not sent — check the connection and contact")
 
         self._redraw()
 
