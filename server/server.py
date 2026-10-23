@@ -8,6 +8,9 @@ from cryptography.hazmat.backends import default_backend
 # Настраиваем логирование
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+# Same bound as client/network.py; accommodates encrypted files up to 10 MiB.
+MAX_FRAME_BYTES = 32 * 1024 * 1024
+
 # Класс для хранения данных подключенных пользователей
 class ConnectedClient:
     def __init__(self, writer, username, ip, port, public_key_pem):
@@ -24,7 +27,8 @@ class MessengerServer:
         self.clients = {}  # username -> ConnectedClient
 
     async def start(self):
-        server = await asyncio.start_server(self.handle_client, self.host, self.port)
+        server = await asyncio.start_server(self.handle_client, self.host, self.port, limit=MAX_FRAME_BYTES)
+        self.port = server.sockets[0].getsockname()[1]
         logging.info(f"Server started on {self.host}:{self.port}")
         async with server:
             await server.serve_forever()
@@ -101,7 +105,10 @@ class MessengerServer:
                 del self.clients[username]
                 await self.broadcast_users()
             writer.close()
-            await writer.wait_closed()
+            try:
+                await writer.wait_closed()
+            except (ConnectionError, OSError):
+                pass
 
     async def broadcast_users(self):
         """Отправляет всем клиентам обновленный список активных пользователей с их IP и публичными ключами."""
